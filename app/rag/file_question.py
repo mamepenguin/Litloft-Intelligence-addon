@@ -42,6 +42,7 @@ from app.youtube_source import (
     LoftSource,
     LoftUnreadable,
     ensure_youtube_frame,
+    is_frame_source,
     read_loft,
 )
 
@@ -306,20 +307,46 @@ def _type_label(mime_type: str, file_path: str | None, drive: str) -> str:
     return f"web link ({source.provider}), kept as a Litloft link file (.loft)"
 
 
-def _has_frame_source(
-    file_type: str, mime_type: str, file_path: str | None, drive: str,
-) -> bool:
+def _loft_frame_url(
+    file_id: str, file_path: str | None, drive: str,
+) -> str | None:
+    """The stream URL of a `.loft` that is a frame source; ``None`` otherwise."""
+    with get_search_db_read() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT loft_source, loft_fetch_failures FROM indexed_files "
+                "WHERE file_id = :fid AND drive = :drive AND active = 1"
+            ),
+            {"fid": file_id, "drive": drive},
+        ).first()
+    if row is None:
+        return None
+    source = _loft_source(file_path, drive)
+    if source is None or not is_frame_source(source.provider, row[0], row[1]):
+        return None
+    return source.url
+
+
+def _has_frame_source(file_id: str, drive: str) -> bool:
     """Whether a frame of this file can be read at all.
 
-    A ``.loft`` needs a readable YouTube reference: no frame exists for another
-    provider, and an unreadable one is not a source at all.
+    A ``.loft`` needs a reference a live read can name: YouTube, or a web one
+    its fetch classified and has not given up. A native video is its own
+    source.
     """
-    if file_type != "video":
+    with get_search_db_read() as session:
+        row = session.execute(
+            sql_text(
+                "SELECT file_type, mime_type, file_path FROM indexed_files "
+                "WHERE file_id = :fid AND drive = :drive AND active = 1"
+            ),
+            {"fid": file_id, "drive": drive},
+        ).first()
+    if row is None or row[0] != "video":
         return False
-    if mime_type != LOFT_MIME:
+    if (row[1] or "") != LOFT_MIME:
         return True
-    source = _loft_source(file_path, drive)
-    return source is not None and source.provider == YOUTUBE_PROVIDER
+    return _loft_frame_url(file_id, row[2], drive) is not None
 
 
 def is_text_less_video(material: Material) -> bool:
@@ -334,18 +361,14 @@ def is_text_less_video(material: Material) -> bool:
 def is_text_video(material: Material) -> bool:
     """Whether a video with text also has frames a question could carry.
 
-    A picture is not a video, and a ``.loft`` of another provider or an
-    unreadable one has no frame to send, so its text path keeps the one image
-    attempt it has.
+    A picture is not a video, and a ``.loft`` that is not a frame source has no
+    frame to send, so its text path keeps the one image attempt it has.
     """
     return (
         material.file_type == "video"
         and bool(material.chunks)
         and not is_picture(material)
-        and _has_frame_source(
-            material.file_type, material.mime_type, material.file_path,
-            material.drive,
-        )
+        and _has_frame_source(material.file_id, material.drive)
     )
 
 
@@ -393,10 +416,9 @@ def available(file_id: str, drive: str) -> bool:
         return True
     file_type = indexed[0] or ""
     mime_type = indexed[1] or ""
-    file_path = indexed[2]
     if _is_picture(file_type, mime_type):
         return llm_routing.any_profile_can_see(settings)
-    if _has_frame_source(file_type, mime_type, file_path, drive):
+    if _has_frame_source(file_id, drive):
         return llm_routing.any_profile_can_see(settings)
     return False
 
@@ -494,7 +516,7 @@ def load_material(
         ).fetchall()
         if not transcripts and not documents:
             if not _is_picture(file_type, mime) and not _has_frame_source(
-                file_type, mime, file_path, drive
+                file_id, drive
             ):
                 return None
             return Material(
@@ -800,13 +822,15 @@ def _youtube_frame_to_cache(
     cancelled: threading.Event | None = None,
 ) -> None:
     try:
-        source = _loft_source(material.file_path, material.drive)
-        if source is None or source.provider != YOUTUBE_PROVIDER:
+        source = _loft_frame_url(
+            material.file_id, material.file_path, material.drive,
+        )
+        if source is None:
             raise ImageUnavailable(IMAGE_FAILURE_FRAME)
         if cancelled is not None and cancelled.is_set():
             raise ImageUnavailable(IMAGE_FAILURE_FRAME)
         ensure_youtube_frame(
-            material.file_id, source.url, cache_path, timestamp, "large",
+            material.file_id, source, cache_path, timestamp, "large",
         )
     except ImageUnavailable:
         raise

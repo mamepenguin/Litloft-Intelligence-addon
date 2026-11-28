@@ -572,9 +572,7 @@ async def _text_question_stream(
         material.file_type == "video"
         and position_seconds is not None
         and file_question._has_frame_source(
-            material.file_type,
-            material.mime_type,
-            material.file_path,
+            material.file_id,
             material.drive,
         )
     )

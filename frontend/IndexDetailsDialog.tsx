@@ -161,9 +161,9 @@ function isTaskApplicable(
       return OCR_MIME_TYPES.has(mt);
     case "frame_ocr":
       if (videoFrameOcr === undefined || videoFrameOcr === "false") return false;
-      // Only a YouTube `.loft` reaches the frame OCR pipeline; any other
+      // Only an analysable `.loft` reaches the frame OCR pipeline; any other
       // `.loft` has no frames to read, so the row would only fail.
-      if (mt === LOFT_MIME) return loftSource === "youtube";
+      if (mt === LOFT_MIME) return loftSource === "youtube" || loftSource === "web";
       return mt.startsWith("video/") || ft === "video";
     case "page_ocr":
       if (scannedPdfOcr === undefined || scannedPdfOcr === "false") return false;

@@ -1744,15 +1744,17 @@ def _image_route_indexed_file(
         "file_path": row.file_path,
         "file_type": row.file_type,
         "mime_type": row.mime_type,
+        "loft_source": row.loft_source,
+        "loft_fetch_failures": row.loft_fetch_failures,
     }
 
 
 def _extract_loft_frame(
     indexed: dict[str, Any], cache_path: Any, t: float, size: str,
 ) -> None:
-    """Cache the frame of a YouTube ``.loft``; any other ``.loft`` has no source."""
+    """Cache the frame of a `.loft` that is a frame source; any other has none."""
     from app.youtube_source import (
-        YOUTUBE_PROVIDER, LoftNotAccessible, LoftUnreadable, ensure_youtube_frame,
+        LoftNotAccessible, LoftUnreadable, ensure_youtube_frame, is_frame_source,
         read_loft,
     )
 
@@ -1763,7 +1765,11 @@ def _extract_loft_frame(
         raise HTTPException(status_code=404, detail="Video file not accessible")
     except LoftUnreadable:
         source = None
-    if source is None or source.provider != YOUTUBE_PROVIDER:
+    if source is None or not is_frame_source(
+        source.provider,
+        indexed.get("loft_source"),
+        indexed.get("loft_fetch_failures"),
+    ):
         logger.warning("youtube frame failed: file=%s class=not_youtube", file_id)
         raise HTTPException(status_code=400, detail="No frame source")
     ensure_youtube_frame(file_id, source.url, cache_path, t, size)

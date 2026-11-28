@@ -1827,7 +1827,7 @@ export interface IndexDetailsResponse {
   scanned_pdf_ocr?: string;
   // Which provider a `.loft` points at, once a fetch has read it; null for an
   // unclassified `.loft` and for every other file.
-  loft_source?: "youtube" | "other" | null;
+  loft_source?: "youtube" | "web" | "other" | null;
   status: IndexDetailsStatus;
   indexed_at: string;
   // The embeddings + provider_stats payload is opaque to the

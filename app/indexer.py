@@ -497,7 +497,7 @@ class IndexManager:
             ).count()
 
             video_types = list(VIDEO_TYPES)
-            # Pipeline videos: native videos, YouTube `.loft`s and `.loft`s
+            # Pipeline videos: native videos, analysable `.loft`s and `.loft`s
             # the fetch has not classified yet. A `.loft` of another source
             # has no scan or frame read and is never counted.
             pipeline_frame = or_(
@@ -505,7 +505,7 @@ class IndexManager:
                 and_(
                     IndexedFile.mime_type == LOFT_MIME,
                     or_(
-                        IndexedFile.loft_source == "youtube",
+                        IndexedFile.loft_source.in_(("youtube", "web")),
                         IndexedFile.loft_source.is_(None),
                     ),
                 ),
@@ -963,7 +963,7 @@ class IndexManager:
                             and_(
                                 IndexedFile.mime_type == LOFT_MIME,
                                 or_(
-                                    IndexedFile.loft_source == "youtube",
+                                    IndexedFile.loft_source.in_(("youtube", "web")),
                                     IndexedFile.loft_source.is_(None),
                                 ),
                                 IndexedFile.loft_fetch_failures < 3,
@@ -1014,7 +1014,7 @@ class IndexManager:
                     if not f.ocr_indexed and f.mime_type not in OCR_IMAGE_TYPES:
                         f.ocr_indexed = True
                     # A `.loft` of another source has no frames to read or
-                    # scan; an unclassified or YouTube one is the fetch's job.
+                    # scan; an unclassified or analysable one is the fetch's job.
                     loft_stays_open = (
                         f.mime_type == LOFT_MIME and f.loft_source != "other"
                     )
@@ -1218,7 +1218,7 @@ class IndexManager:
                         priority=-10,
                     ))
                     queued_any = True
-                if loft_source == "youtube" and frame_read and not frame_done:
+                if loft_source in ("youtube", "web") and frame_read and not frame_done:
                     await self._enqueue(IndexTask(
                         file_id=file_id, task_type=TaskType.FRAME_OCR,
                         priority=-10,
@@ -1257,7 +1257,7 @@ class IndexManager:
                 file_id=file_id, task_type=TaskType.FRAME_SCAN
             ))
 
-        # A `.loft` is read and, if it points at YouTube, fetched and run
+        # A `.loft` is read and, if it has a video provider, fetched and run
         # through both frame stages by one task; the reference's own path is
         # never decoded.
         if mime_type == LOFT_MIME:
@@ -1428,12 +1428,12 @@ class IndexManager:
                     ))
                 if file.mime_type == LOFT_MIME and file.loft_source != "other":
                     rebuild_only = (
-                        file.loft_source == "youtube"
+                        file.loft_source in ("youtube", "web")
                         and file.frame_ocr_read
                         and not file.frame_ocr_indexed
                     )
                     wants_candidates = (
-                        file.loft_source == "youtube"
+                        file.loft_source in ("youtube", "web")
                         and not file.loft_candidates_done
                         and int(file.loft_fetch_failures or 0) < 3
                     )

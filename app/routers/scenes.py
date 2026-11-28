@@ -1,7 +1,7 @@
 """``GET /files/{file_id}/scenes``: representative scenes without a model.
 
 Runs the selection of SPEC-ADDON-112 over the rows the indexer already stored,
-so any indexed native video, and a YouTube ``.loft``, gets its sections and
+so any indexed native video, and an analysable ``.loft``, gets its sections and
 frame times whether or not a Visual Index was generated. Nothing is written and
 no LLM is called.
 """
@@ -55,13 +55,13 @@ def _resolve_window(
     return VideoScenesWindow(start=lo, end=None), lo, None
 
 
-def _require_youtube_loft(indexed: dict) -> None:
+def _require_analysable_loft(indexed: dict) -> None:
     # The fetch's classification is authoritative: re-reading the reference
     # here would fail for a drive this process cannot mount, and a `.loft`
     # of another source has no video to select from.
     classified = indexed.get("loft_source")
     if classified is not None:
-        if classified == "youtube":
+        if classified in ("youtube", "web"):
             return
         raise HTTPException(status_code=400, detail="Not a video file")
     try:
@@ -88,7 +88,7 @@ def get_scenes(
     if indexed["file_type"] != "video":
         raise HTTPException(status_code=400, detail="Not a video file")
     if indexed["mime_type"] == LOFT_MIME:
-        _require_youtube_loft(indexed)
+        _require_analysable_loft(indexed)
 
     inputs = load_selection_inputs(file_id)
     window, lo, hi = _resolve_window(start, end, inputs.duration)

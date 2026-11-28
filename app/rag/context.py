@@ -977,8 +977,8 @@ def _collect_image_snippets(
     return snippets
 
 
-def _is_youtube_loft(file_id: str) -> bool:
-    """Whether ``file_id`` is a `.loft` whose fetch classified it as YouTube."""
+def _is_analysable_loft(file_id: str) -> bool:
+    """Whether ``file_id`` is a `.loft` whose fetch classified it as analysable."""
     try:
         with get_search_db_read() as session:
             row = session.execute(
@@ -990,7 +990,7 @@ def _is_youtube_loft(file_id: str) -> bool:
     except Exception:
         # A narrow harness may predate the column; no source is known.
         return False
-    return row is not None and row[0] == "youtube"
+    return row is not None and row[0] in ("youtube", "web")
 
 
 def build_file_context(
@@ -1029,7 +1029,7 @@ def build_file_context(
             keywords=keywords,
         )
         if (file_type == "video" and not is_loft) or (
-            is_loft and _is_youtube_loft(candidate.file_id)
+            is_loft and _is_analysable_loft(candidate.file_id)
         ):
             has_text_match = any(
                 match.match_type == "text_content"

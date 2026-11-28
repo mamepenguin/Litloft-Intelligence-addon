@@ -157,18 +157,18 @@ def is_visual_index_file(mime_type: str | None, loft_source: str | None,
     """Whether a stored file may have a Visual Index.
 
     Native videos always may; a `.loft` only when its fetch classified it as
-    YouTube and has not given it up for good.
+    an analysable source and has not given it up for good.
     """
     if mime_type in VIDEO_TYPES:
         return True
     return (
         mime_type == LOFT_MIME
-        and loft_source == "youtube"
+        and loft_source in ("youtube", "web")
         and int(failures or 0) < FETCH_FAILURE_CAP
     )
 
 
-def _frame_source_row(file_id: str) -> tuple[str, str | None, str] | None:
+def _frame_source_row(file_id: str) -> tuple[str, str | None, str, int] | None:
     with get_search_db_read() as session:
         row = (
             session.query(IndexedFile)
@@ -177,7 +177,10 @@ def _frame_source_row(file_id: str) -> tuple[str, str | None, str] | None:
         )
         if row is None:
             return None
-        return row.mime_type, row.loft_source, row.drive
+        return (
+            row.mime_type, row.loft_source, row.drive,
+            int(row.loft_fetch_failures or 0),
+        )
 
 
 def _read_or_extract_frame(
@@ -187,26 +190,24 @@ def _read_or_extract_frame(
 ) -> bytes:
     """Load one frame without exposing synchronous I/O to the event loop.
 
-    A YouTube `.loft` has no video of its own: its scene frame is the kept
-    ``small`` picture when the fetch left one, and otherwise a `small` frame
-    read from YouTube through the lookup it already does. Neither path ever
-    decodes the reference's own file.
+    A `.loft` has no video of its own: its scene frame is the kept ``small``
+    picture when the fetch left one, and otherwise a `small` frame read from
+    the reference's stream through the lookup it already does. Neither path
+    ever decodes the reference's own file.
     """
     row = _frame_source_row(file_id)
     if row is not None and row[0] == LOFT_MIME:
-        if row[1] != "youtube":
+        if row[1] not in ("youtube", "web"):
             raise RuntimeError("no frame source")
         cache_path = frame_cache_path(file_id, start_time)
         if cache_path.exists() and cache_path.stat().st_size > 0:
             return cache_path.read_bytes()
-        from app.youtube_source import (
-            YOUTUBE_PROVIDER,
-            ensure_youtube_frame,
-            read_loft,
-        )
+        from app.youtube_source import ensure_youtube_frame, is_frame_source, read_loft
 
         source = read_loft(file_path, row[2])
-        if source is None or source.provider != YOUTUBE_PROVIDER:
+        if source is None or not is_frame_source(
+            source.provider, row[1], row[3],
+        ):
             raise RuntimeError("no frame source")
         ensure_youtube_frame(file_id, source.url, cache_path, start_time, "small")
         return cache_path.read_bytes()
@@ -752,7 +753,7 @@ class VideoVisualWorker:
                             IndexedFile.mime_type.in_(list(VIDEO_TYPES)),
                             and_(
                                 IndexedFile.mime_type == LOFT_MIME,
-                                IndexedFile.loft_source == "youtube",
+                                IndexedFile.loft_source.in_(("youtube", "web")),
                                 IndexedFile.loft_fetch_failures < FETCH_FAILURE_CAP,
                             ),
                         ),

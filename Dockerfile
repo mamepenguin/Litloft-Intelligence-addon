@@ -22,7 +22,7 @@ RUN git clone --depth 1 --branch v0.1.6 https://github.com/asg017/sqlite-vec.git
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --no-cache-dir "yt-dlp[default]>=2026.10.26" "nodejs-wheel>=24,<25"
+RUN pip install --no-cache-dir "yt-dlp[default,curl-cffi]>=2026.10.26" "nodejs-wheel>=24,<25"
 
 COPY app/ ./app/
 COPY scripts/ ./scripts/
