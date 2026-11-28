@@ -32,7 +32,7 @@ from app.frame_cache import frame_cache_dir, round_ms, tile_cache_dir
 from app.models import Embedding, IndexedFile
 from app.video_frames import extract_frame
 from app.workers import blip, ml_imports
-from app.workers.whisper import LOFT_MIME, _skip_no_longer_loft
+from app.workers.whisper import LOFT_MIME, _NoLongerALoft, _skip_no_longer_loft
 from app.youtube_source import (
     STORYBOARD_LOOKUP_LIMIT_SECONDS,
     YOUTUBE_PROVIDER,
@@ -1030,7 +1030,12 @@ def _index_clip_loft(
         _handle_thumbnail_fallback(
             file_id, mime_type, filename, thumbnail_path, close_scene_leg=False,
         )
-    return _index_youtube_storyboard(file_id, file_path, duration)
+    try:
+        return _index_youtube_storyboard(file_id, file_path, duration)
+    except _NoLongerALoft:
+        # A conversion overtook the leg; the converted file still needs the
+        # CLIP task that indexes its own frames, so this one failed.
+        return False
 
 
 def _close_scene_leg(file_id: str, *, require_loft_mime: bool = False) -> None:
@@ -1046,7 +1051,7 @@ def _close_scene_leg(file_id: str, *, require_loft_mime: bool = False) -> None:
 def _storyboard_definite(file_id: str) -> bool:
     """End a storyboard leg that wrote nothing but settled the file."""
     _storyboard_failed.discard(file_id)
-    _close_scene_leg(file_id)
+    _close_scene_leg(file_id, require_loft_mime=True)
     return True
 
 
@@ -1095,7 +1100,9 @@ def _index_youtube_storyboard(
             description = run_lookup(source.url, STORYBOARD_LOOKUP_LIMIT_SECONDS)
         except Exception:  # noqa: BLE001 - LookupFailed's detail may name a URL
             return _storyboard_failure(file_id, "lookup_failed")
-        if index_storyboard(file_id, description, indexed_duration):
+        if index_storyboard(
+            file_id, description, indexed_duration, require_loft_mime=True,
+        ):
             _storyboard_failed.discard(file_id)
             return True
         _storyboard_failed.add(file_id)

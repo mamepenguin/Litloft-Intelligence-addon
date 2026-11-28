@@ -50,7 +50,19 @@ from app.models import (  # noqa: E402
     VideoVisualScene,
 )
 from tests.vec_partition_db import search_index  # noqa: E402,F401 - fixture
+from tests.test_spec_addon_078_youtube_storyboard import (  # noqa: E402,F401 - fixtures
+    add_loft,
+    flags_of,
+    new_id,
+    pil,
+    rows_of,
+    run,
+    serve_storyboard,
+    storyboard_fps,
+    world,
+)
 from tests.youtube_frame_doubles import (  # noqa: E402,F401 - fixtures
+    describe,
     needs_ffmpeg,
     youtube,
 )
@@ -1090,3 +1102,103 @@ def test_spec_addon_196_i37_a_discarded_stt_transcription_finishes_its_job(
     assert len(rows) == 1
     assert rows[0]["status"] == "skipped"
     assert rows[0]["completed_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# I37: a conversion during the CLIP leg's own storyboard
+# ---------------------------------------------------------------------------
+
+
+def _sync_clip_to_video(world, file_id):
+    """The conversion's ``files.moved`` sync: the row is now the media file."""
+    with world.Session() as session:
+        row = session.query(IndexedFile).filter_by(file_id=file_id).one()
+        row.mime_type = VIDEO_MIME
+        row.filename = f"{TITLE}.mp4"
+        row.file_path = str(world.tmp / f"{TITLE}.mp4")
+        session.commit()
+
+
+def _assert_clip_leg_wrote_nothing(world, file_id, caplog):
+    assert rows_of(world, file_id) == []
+    assert flags_of(world, file_id)[0] is False
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages.count(INFO_SKIP.format(file_id=file_id)) == 1
+
+
+def test_spec_addon_196_i37_the_clip_storyboard_after_the_sync_writes_nothing(
+    world, youtube, monkeypatch, caplog,
+):
+    from app.workers import clip as clip_worker
+
+    duration = 90.0
+    board, _per_tile = serve_storyboard(
+        youtube, world.pil, tiles=9, fps=storyboard_fps(duration),
+    )
+    youtube.set_ytdlp(describe=describe([board], duration=duration))
+    file_id = new_id()
+    add_loft(world, file_id, duration=duration)
+
+    real_lookup = clip_worker.run_lookup
+
+    def _lookup_then_sync(*args, **kwargs):
+        answer = real_lookup(*args, **kwargs)
+        _sync_clip_to_video(world, file_id)
+        return answer
+
+    monkeypatch.setattr(clip_worker, "run_lookup", _lookup_then_sync)
+
+    with caplog.at_level(logging.INFO):
+        assert run(file_id) is False
+
+    _assert_clip_leg_wrote_nothing(world, file_id, caplog)
+
+
+def test_spec_addon_196_i37_the_clip_leg_without_a_storyboard_after_the_sync_writes_nothing(
+    world, youtube, monkeypatch, caplog,
+):
+    from app.workers import clip as clip_worker
+
+    duration = 90.0
+    youtube.set_ytdlp(describe=describe([], duration=duration))
+    file_id = new_id()
+    add_loft(world, file_id, duration=duration)
+
+    real_lookup = clip_worker.run_lookup
+
+    def _lookup_then_sync(*args, **kwargs):
+        answer = real_lookup(*args, **kwargs)
+        _sync_clip_to_video(world, file_id)
+        return answer
+
+    monkeypatch.setattr(clip_worker, "run_lookup", _lookup_then_sync)
+
+    with caplog.at_level(logging.INFO):
+        assert run(file_id) is False
+
+    _assert_clip_leg_wrote_nothing(world, file_id, caplog)
+
+
+def test_spec_addon_196_i37_the_clip_leg_before_a_lookup_after_the_sync_writes_nothing(
+    world, monkeypatch, caplog,
+):
+    from app.workers import clip as clip_worker
+    from app.youtube_source import LoftSource
+
+    file_id = new_id()
+    add_loft(world, file_id)
+
+    real_read = clip_worker.read_loft
+
+    def _read_then_sync(*args, **kwargs):
+        real_read(*args, **kwargs)
+        _sync_clip_to_video(world, file_id)
+        # A reference that needs no lookup settles the leg without one.
+        return LoftSource(provider="vimeo", url="https://example.test/v")
+
+    monkeypatch.setattr(clip_worker, "read_loft", _read_then_sync)
+
+    with caplog.at_level(logging.INFO):
+        assert run(file_id) is False
+
+    _assert_clip_leg_wrote_nothing(world, file_id, caplog)
