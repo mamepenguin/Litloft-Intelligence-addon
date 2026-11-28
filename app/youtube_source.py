@@ -210,14 +210,17 @@ def is_frame_source(
 def pick_format(description: dict[str, Any]) -> dict[str, Any] | None:
     """The tallest plain-HTTPS video format up to 720, video-only when there is one.
 
-    A video-only format is preferred over a taller muxed one; among equal
-    heights an H.264 stream wins, then an mp4 container. ``None`` when neither
-    kind has a qualifying format.
+    A video-only format is preferred over a taller muxed one, and a muxed one
+    over a taller format whose codecs are unknown; among equal heights an H.264
+    stream wins, then an mp4 container. ``None`` when no kind has a qualifying
+    format.
     """
     best_video: dict[str, Any] | None = None
     best_muxed: dict[str, Any] | None = None
+    best_unknown: dict[str, Any] | None = None
     video_key: tuple[int, int, int] | None = None
     muxed_key: tuple[int, int, int] | None = None
+    unknown_key: tuple[int, int, int] | None = None
     formats = description.get("formats")
     if not isinstance(formats, list):
         return None
@@ -227,7 +230,7 @@ def pick_format(description: dict[str, Any]) -> dict[str, Any] | None:
         height, url = fmt.get("height"), fmt.get("url")
         if (
             fmt.get("protocol") != "https"
-            or fmt.get("vcodec") in (None, "none")
+            or fmt.get("vcodec") == "none"
             or not isinstance(url, str) or not url
             or isinstance(height, bool) or not isinstance(height, int)
             or not 0 < height <= _MAX_FRAME_HEIGHT
@@ -238,12 +241,18 @@ def pick_format(description: dict[str, Any]) -> dict[str, Any] | None:
             1 if str(fmt.get("vcodec")).startswith("avc1") else 0,
             1 if fmt.get("ext") == "mp4" else 0,
         )
-        if fmt.get("acodec") == "none":
+        if fmt.get("vcodec") is None:
+            if unknown_key is None or key > unknown_key:
+                best_unknown, unknown_key = fmt, key
+        elif fmt.get("acodec") == "none":
             if video_key is None or key > video_key:
                 best_video, video_key = fmt, key
         elif muxed_key is None or key > muxed_key:
             best_muxed, muxed_key = fmt, key
-    return best_video if best_video is not None else best_muxed
+    for best in (best_video, best_muxed, best_unknown):
+        if best is not None:
+            return best
+    return None
 
 
 _lock = threading.Lock()
