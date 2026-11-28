@@ -1,4 +1,4 @@
-"""SPEC-ADDON-193 I4/I5: which format a fetch downloads and reads a frame from.
+"""SPEC-ADDON-193 I4 (r5)/I5: which format a fetch downloads and reads a frame from.
 
 I4: ``pick_format`` returns the tallest video-only plain-HTTPS format up to 720,
 otherwise the tallest muxed one by the same ranking, otherwise ``None``; it never
@@ -150,7 +150,28 @@ PICKS = [
     ),
     pytest.param(
         "the video codec is null",
-        [video("vc", 720, vcodec=None)], None, id="vcodec-null",
+        [video("vc", 720, vcodec=None)], "vc", id="vcodec-null",
+    ),
+    pytest.param(
+        "progressive formats with both codecs unknown beside HLS, as one provider lists them",
+        [
+            _format("p240", 240, vcodec=None, acodec=None),
+            _format("p720", 720, vcodec=None, acodec=None),
+            _format("p1080", 1080, vcodec=None, acodec=None),
+            muxed("hls720", 720, protocol="m3u8_native"),
+        ],
+        "p720",
+        id="unknown-codecs-progressive",
+    ),
+    pytest.param(
+        "a muxed format of known codec outranks a taller one of unknown codec",
+        [muxed("m360", 360), _format("u720", 720, vcodec=None, acodec=None)],
+        "m360",
+        id="known-muxed-before-unknown",
+    ),
+    pytest.param(
+        "an unknown codec without a height",
+        [_format("u", None, vcodec=None, acodec=None)], None, id="unknown-codec-no-height",
     ),
     pytest.param("the URL is null", [video("u", 720, url=None)], None, id="url-null"),
     pytest.param("the URL is empty", [video("u", 720, url="")], None, id="url-empty"),
@@ -240,6 +261,11 @@ SELECTIONS = [
     pytest.param(
         "a video-only format above the cap beside a muxed one",
         [video("v1080", 1080), muxed("m360", 360)], True, id="above-cap-beside-muxed",
+    ),
+    pytest.param(
+        "progressive formats with both codecs unknown",
+        [_format("p480", 480, vcodec=None, acodec=None), _format("p720", 720, vcodec=None, acodec=None)],
+        True, id="unknown-codecs-progressive",
     ),
     pytest.param(
         "only audio", [audio("a128")], False, id="only-audio",
