@@ -109,6 +109,9 @@ async def test_spec_addon_117_a_new_loft_gets_one_fetch_at_zero_and_no_frame_tas
         pytest.param("youtube", dict(frame_scan_indexed=False), id="youtube-scan-wanted"),
         pytest.param("youtube", dict(frame_ocr_read=False, frame_ocr_indexed=False),
                      id="youtube-ocr-wanted"),
+        pytest.param("web", dict(frame_scan_indexed=False), id="web-scan-wanted"),
+        pytest.param("web", dict(frame_ocr_read=False, frame_ocr_indexed=False),
+                     id="web-ocr-wanted"),
     ],
 )
 async def test_spec_addon_117_the_backlog_fetch_is_queued_at_minus_ten_and_flags_stay_open(
@@ -162,11 +165,12 @@ async def test_spec_addon_117_i1_the_sweep_closes_a_loft_of_source_other_and_que
 
 
 @pytest.mark.parametrize("mode", ["on_index", "manual", "false"])
+@pytest.mark.parametrize("source", ["youtube", "web"])
 async def test_spec_addon_117_i7_a_stored_read_is_rebuilt_by_the_rebuild_only_task(
-    db, tmp_path, monkeypatch, mode,
+    db, tmp_path, monkeypatch, mode, source,
 ):
     patch_features(monkeypatch, video_frame_ocr=mode)
-    _loft(db, tmp_path, "yt1", "youtube", frame_ocr_read=True, frame_ocr_indexed=False,
+    _loft(db, tmp_path, "yt1", source, frame_ocr_read=True, frame_ocr_indexed=False,
           loft_candidates_done=True)
 
     manager = _manager()
@@ -181,7 +185,7 @@ async def test_spec_addon_117_i7_a_stored_read_is_rebuilt_by_the_rebuild_only_ta
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("source", ["youtube", None])
+@pytest.mark.parametrize("source", ["youtube", "web", None])
 async def test_spec_addon_117_a_frame_ocr_reindex_of_a_loft_opens_the_read_and_fetches_at_100(
     db, tmp_path, monkeypatch, source,
 ):
@@ -291,11 +295,12 @@ async def test_spec_addon_117_i13_a_clip_regenerate_fetches_although_the_clip_ta
     assert await _queued(manager, FETCH) == [("loft1", 100)]
 
 
+@pytest.mark.parametrize("source", ["youtube", "web"])
 async def test_spec_addon_117_prioritize_of_a_stored_read_queues_the_rebuild_only_task(
-    db, tmp_path, monkeypatch,
+    db, tmp_path, monkeypatch, source,
 ):
     patch_features(monkeypatch, video_frame_ocr="manual")
-    _loft(db, tmp_path, "yt1", "youtube", frame_ocr_read=True, frame_ocr_indexed=False,
+    _loft(db, tmp_path, "yt1", source, frame_ocr_read=True, frame_ocr_indexed=False,
           loft_candidates_done=True)
     manager = _manager()
 
@@ -348,7 +353,7 @@ def _status(monkeypatch):
 
 
 @pytest.mark.parametrize("mode, ocr_pending", [("on_index", 1), ("manual", 0)])
-def test_spec_addon_117_i10_status_counts_youtube_and_unclassified_lofts_never_other(
+def test_spec_addon_117_i10_status_counts_youtube_web_and_unclassified_lofts_never_other(
     db, tmp_path, monkeypatch, mode, ocr_pending,
 ):
     patch_features(monkeypatch, video_frame_ocr=mode)
@@ -356,6 +361,8 @@ def test_spec_addon_117_i10_status_counts_youtube_and_unclassified_lofts_never_o
     baseline, _ = _status(monkeypatch)
     _loft(db, tmp_path, "yt-done", "youtube")
     _loft(db, tmp_path, "yt-todo", "youtube", frame_scan_indexed=False)
+    _loft(db, tmp_path, "web-todo", "web", frame_scan_indexed=False,
+          frame_ocr_read=False, frame_ocr_indexed=False)
     _loft(db, tmp_path, "unclassified", None, frame_ocr_read=False, frame_ocr_indexed=False)
     _loft(db, tmp_path, "other", "other", frame_scan_indexed=False,
           frame_ocr_read=False, frame_ocr_indexed=False)
@@ -363,9 +370,9 @@ def test_spec_addon_117_i10_status_counts_youtube_and_unclassified_lofts_never_o
     status, _ = _status(monkeypatch)
 
     assert status.indexed["frame_scan"] - baseline.indexed["frame_scan"] == 2
-    assert status.pending["frame_scan"] - baseline.pending["frame_scan"] == 1
-    assert status.pending["frame_ocr"] - baseline.pending["frame_ocr"] == ocr_pending
-    assert status.pending["total"] - baseline.pending["total"] == 1 + ocr_pending
+    assert status.pending["frame_scan"] - baseline.pending["frame_scan"] == 2
+    assert status.pending["frame_ocr"] - baseline.pending["frame_ocr"] == 2 * ocr_pending
+    assert status.pending["total"] - baseline.pending["total"] == 2 + 2 * ocr_pending
 
 
 def test_spec_addon_117_the_queue_breakdown_has_a_loft_media_row(db, monkeypatch):
@@ -383,6 +390,7 @@ def test_spec_addon_117_the_queue_breakdown_has_a_loft_media_row(db, monkeypatch
     "file_id, source, expected",
     [
         ("yt1", "youtube", "youtube"),
+        ("web1", "web", "web"),
         ("other1", "other", "other"),
         ("loft1", None, None),
         ("vid", None, None),

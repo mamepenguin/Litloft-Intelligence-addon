@@ -119,15 +119,17 @@ def test_spec_addon_146_i13_a_row_written_without_the_column_still_inserts(
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_146_i11_the_vec_clip_dimension_migration_reopens_youtube_lofts_under_the_cap(
+def test_spec_addon_146_i11_the_vec_clip_dimension_migration_reopens_youtube_and_web_lofts_under_the_cap(
     search_index, monkeypatch,  # noqa: F811
 ):
     _add("youtube", LOFT_MIME, "youtube")
+    _add("web", LOFT_MIME, "web")
     _add("capped", LOFT_MIME, "youtube", 3)
+    _add("capped_web", LOFT_MIME, "web", 3)
     _add("other", LOFT_MIME, "other")
     search_index.sql(f"UPDATE indexed_files SET {FLAG} = 1")
     dim = search_index.dim("vec_clip")
-    for file_id in ("youtube", "capped"):
+    for file_id in ("youtube", "web", "capped", "capped_web"):
         search_index.add_embedding(f"clip_{file_id}_1", file_id, "clip", "vec_clip")
         search_index.put_vector("vec_clip", f"clip_{file_id}_1", np.ones(dim), "clip")
     monkeypatch.setattr(database, "_get_clip_embedding_dim", lambda: dim + 1)
@@ -135,7 +137,9 @@ def test_spec_addon_146_i11_the_vec_clip_dimension_migration_reopens_youtube_lof
     with search_index.engine.connect() as conn:
         database._migrate_vec_clip_if_needed(conn)
 
-    assert _flags(search_index.engine) == {"youtube": 0, "capped": 1, "other": 1}
+    assert _flags(search_index.engine) == {
+        "youtube": 0, "web": 0, "capped": 1, "capped_web": 1, "other": 1,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +170,7 @@ async def test_spec_addon_146_i8_a_fetched_youtube_loft_without_candidates_is_qu
 ):
     patch_features(monkeypatch, video_frame_ocr="on_index")
     _loft(db, tmp_path, "youtube", "youtube")
+    _loft(db, tmp_path, "web", "web")
     _loft(db, tmp_path, "unclassified", None)
     _loft(db, tmp_path, "done", "youtube", candidates=True)
     _loft(db, tmp_path, "capped", "youtube", failures=3)
@@ -176,7 +181,9 @@ async def test_spec_addon_146_i8_a_fetched_youtube_loft_without_candidates_is_qu
 
     await manager._resume_incomplete()
 
-    assert sorted(await _queued(manager, FETCH)) == [("unclassified", -10), ("youtube", -10)]
+    assert sorted(await _queued(manager, FETCH)) == [
+        ("unclassified", -10), ("web", -10), ("youtube", -10),
+    ]
     assert await _queued(manager, "frame_scan") == []
     assert await _queued(manager, "clip") == []
 
@@ -203,12 +210,14 @@ async def test_spec_addon_146_i8_prioritize_queues_a_fetch_at_100_when_only_the_
     """The frame text is read but not indexed, which alone queues the rebuild-only task."""
     patch_features(monkeypatch, video_frame_ocr="manual")
     _loft(db, tmp_path, "yt1", "youtube", frame_ocr_read=True, frame_ocr_indexed=False)
+    _loft(db, tmp_path, "web1", "web", frame_ocr_read=True, frame_ocr_indexed=False)
     manager = _manager()
 
     await manager.prioritize("yt1")
+    await manager.prioritize("web1")
 
-    assert await _queued(manager, FETCH) == [("yt1", 100)]
-    assert await _queued(manager, "frame_ocr") == [("yt1", 100)]
+    assert await _queued(manager, FETCH) == [("yt1", 100), ("web1", 100)]
+    assert await _queued(manager, "frame_ocr") == [("yt1", 100), ("web1", 100)]
 
 
 # ---------------------------------------------------------------------------

@@ -210,10 +210,10 @@ def test_spec_addon_117_one_fetch_runs_the_scan_and_then_the_ocr_read(world, gra
 @pytest.mark.parametrize(
     "body",
     [
-        pytest.param({"provider": "vimeo", "url": "https://vimeo.com/1"}, id="another-provider"),
         pytest.param("this is not json", id="not-json"),
         pytest.param({"provider": "youtube"}, id="no-url"),
         pytest.param({"url": YOUTUBE_URL}, id="no-provider"),
+        pytest.param({"provider": "generic", "url": "https://example.com/v"}, id="generic"),
     ],
 )
 def test_spec_addon_117_i1_a_loft_with_no_youtube_reference_becomes_other_with_flags_closed(
@@ -229,6 +229,24 @@ def test_spec_addon_117_i1_a_loft_with_no_youtube_reference_becomes_other_with_f
     assert world.flags("other0000001") == (True, True, True)
     assert world.lookups() == 0
     assert world.downloads() == []
+
+
+def test_spec_addon_117_i1_another_provider_is_classified_web_and_fetched(world, gradient):
+    """SPEC-ADDON-193 I1 revises this: a provider that is not YouTube is a web source."""
+    world.configure(frame_ocr="on_index")
+    world.serve(gradient, duration=VIDEO_SECONDS)
+    world.add_loft(
+        "web000000001", {"provider": "vimeo", "url": "https://vimeo.com/1"},
+        frame_ocr_read=False, frame_ocr_indexed=False,
+    )
+
+    fetch("web000000001")
+
+    assert world.source("web000000001") == "web"
+    assert world.lookups() == 1
+    assert world.downloads() != []
+    assert world.flags("web000000001") == (True, True, True)
+    assert world.failures("web000000001") == 0
 
 
 def test_spec_addon_117_i1_a_loft_that_cannot_be_read_stays_unclassified_and_uncounted(
@@ -723,7 +741,7 @@ def test_spec_addon_117_i2_a_download_of_unknown_duration_is_stopped_at_7200_s(
 # ---------------------------------------------------------------------------
 
 
-def test_spec_addon_117_i2_the_download_takes_one_video_only_rendition_from_the_stored_url(
+def test_spec_addon_117_i2_the_download_takes_one_rendition_from_the_stored_url(
     world, gradient,
 ):
     """SPEC-ADDON-117 I2 (revised): yt-dlp, not ffmpeg, reads the stored URL."""
@@ -739,7 +757,9 @@ def test_spec_addon_117_i2_the_download_takes_one_video_only_rendition_from_the_
 
     (download,) = world.youtube.download_commands()
     argv = download["argv"]
-    assert argv[argv.index("-f") + 1] == "bv*[height<=720][protocol=https]"
+    assert argv[argv.index("-f") + 1] == (
+        "bv[height<=720][protocol=https]/bv*[height<=720][protocol=https]"
+    )
     assert argv[argv.index("--http-chunk-size") + 1] == "10M"
     for option in ("--no-playlist", "--ignore-config"):
         assert option in argv

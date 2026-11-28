@@ -19,7 +19,7 @@ LOFT_MIME = "application/vnd.litloft.loft+json"
 ON_SCREEN = "salt and sugar on screen"
 
 
-def _video_with_frame_text(index, file_id: str, mime: str) -> None:
+def _video_with_frame_text(index, file_id: str, mime: str, source: str | None = None) -> None:
     seed = Seed(index)
     seed.file(file_id, f"{file_id}.bin", mime=mime)
     index.sql(
@@ -28,7 +28,10 @@ def _video_with_frame_text(index, file_id: str, mime: str) -> None:
         f=file_id,
     )
     if mime == LOFT_MIME:
-        index.sql("UPDATE indexed_files SET loft_source = 'youtube' WHERE file_id = :f", f=file_id)
+        index.sql(
+            "UPDATE indexed_files SET loft_source = :s WHERE file_id = :f",
+            s=source, f=file_id,
+        )
     seed.text_chunk(file_id, 0, ON_SCREEN)
     index.sql(
         "INSERT INTO video_frame_texts(file_id, chunk_index, start_time, end_time, text) "
@@ -50,11 +53,12 @@ def _candidate(file_id: str, mime: str, file_type: str) -> RetrievedFile:
 
 
 @pytest.mark.parametrize("loft_file_type", ["video", "other"])
-def test_spec_addon_117_i4_a_youtube_lofts_frame_text_reaches_the_drive_wide_ask_as_a_native_videos(
-    search_index, loft_file_type,  # noqa: F811
+@pytest.mark.parametrize("loft_source", ["youtube", "web"])
+def test_spec_addon_117_i4_an_analysable_lofts_frame_text_reaches_the_drive_wide_ask_as_a_native_videos(
+    search_index, loft_file_type, loft_source,  # noqa: F811
 ):
     _video_with_frame_text(search_index, "native", "video/mp4")
-    _video_with_frame_text(search_index, "ytloft", LOFT_MIME)
+    _video_with_frame_text(search_index, "ytloft", LOFT_MIME, loft_source)
 
     native = build_file_context(_candidate("native", "video/mp4", "video"), RagConfig())
     loft = build_file_context(_candidate("ytloft", LOFT_MIME, loft_file_type), RagConfig())

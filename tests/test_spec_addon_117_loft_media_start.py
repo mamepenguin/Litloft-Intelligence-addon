@@ -87,6 +87,7 @@ async def test_spec_addon_117_i10_a_start_reopens_unclassified_lofts_with_nothin
         "VALUES ('read', 0, 0.0, 10.0, 'kept')"
     )
     _loft(db, tmp_path, "youtube", "youtube")
+    _loft(db, tmp_path, "web", "web")
     _loft(db, tmp_path, "other", "other")
     seed_indexed_file(
         db, "native", "video/mp4", tmp_path / "native.mp4", file_type="video", **CLOSED,
@@ -96,7 +97,8 @@ async def test_spec_addon_117_i10_a_start_reopens_unclassified_lofts_with_nothin
     stop = await _start(manager)
     try:
         reopened = _flags(db, "fresh")
-        untouched = {f: _flags(db, f) for f in ("scanned", "read", "youtube", "other", "native")}
+        untouched = {f: _flags(db, f) for f in
+                     ("scanned", "read", "youtube", "web", "other", "native")}
         await manager._resume_incomplete()
         queued = [
             (t.file_id, t.priority)
@@ -109,7 +111,8 @@ async def test_spec_addon_117_i10_a_start_reopens_unclassified_lofts_with_nothin
     assert reopened == (False, False, False)
     assert untouched == {f: (True, True, True) for f in untouched}
     assert queued == [
-        ("fresh", -10), ("scanned", -10), ("read", -10), ("youtube", -10),
+        ("fresh", -10), ("scanned", -10), ("read", -10), ("web", -10),
+        ("youtube", -10),
     ]
 
 
