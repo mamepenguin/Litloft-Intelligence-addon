@@ -45,7 +45,7 @@ from app.video_frames import (
 )
 from app.workers.metadata import _remove_embeddings, _store_embedding, embed_passages
 from app.workers.ocr import _get_engine, detect_boxes, recognise_boxes
-from app.workers.whisper import LOFT_MIME
+from app.workers.whisper import LOFT_MIME, _NoLongerALoft, _skip_no_longer_loft
 
 logger = logging.getLogger(__name__)
 
@@ -496,7 +496,9 @@ def _chunks_for_segments(segments: list[_Segment]) -> list[dict[str, Any]]:
     return chunks
 
 
-def _store_read(file_id: str, segments: list[_Segment]) -> bool:
+def _store_read(
+    file_id: str, segments: list[_Segment], *, require_loft_mime: bool = False,
+) -> bool:
     """A5: replace the stored read, lines included, in one short transaction."""
     chunks = _chunks_for_segments(segments)
     rows: list[VideoFrameLines] = []
@@ -531,6 +533,8 @@ def _store_read(file_id: str, segments: list[_Segment]) -> bool:
             ).first()
             if row is None:
                 return False
+            if require_loft_mime and row.mime_type != LOFT_MIME:
+                _skip_no_longer_loft(file_id)
             session.query(VideoFrameText).filter_by(file_id=file_id).delete()
             session.query(VideoFrameLines).filter_by(file_id=file_id).delete()
             _remove_embeddings(session, file_id, "text_content")
@@ -548,6 +552,8 @@ def _store_read(file_id: str, segments: list[_Segment]) -> bool:
             row.frame_ocr_indexed = False
             row.frame_ocr_rule = FRAME_OCR_RULE
             return True
+    except _NoLongerALoft:
+        raise
     except Exception as exc:
         logger.error("Frame OCR write failed for %s: %s", file_id, exc)
         return False
@@ -592,7 +598,7 @@ def _read_stored_chunks(file_id: str) -> list[dict[str, Any]]:
         ]
 
 
-def _build_rows(file_id: str) -> bool:
+def _build_rows(file_id: str, *, require_loft_mime: bool = False) -> bool:
     """A6: build the text_content rows from the stored read."""
     chunks = _read_stored_chunks(file_id)
     vectors: list[Any] = []
@@ -611,6 +617,8 @@ def _build_rows(file_id: str) -> bool:
             ).first()
             if row is None or not row.frame_ocr_read:
                 return False
+            if require_loft_mime and row.mime_type != LOFT_MIME:
+                _skip_no_longer_loft(file_id)
             _remove_embeddings(session, file_id, "text_content")
             delete_fts_text_content(session, file_id)
             for chunk, vector in zip(chunks, vectors):
@@ -641,6 +649,8 @@ def _build_rows(file_id: str) -> bool:
                 ])
             row.frame_ocr_indexed = True
             return True
+    except _NoLongerALoft:
+        raise
     except Exception as exc:
         logger.error("Frame text row write failed for %s: %s", file_id, exc)
         return False
@@ -648,6 +658,7 @@ def _build_rows(file_id: str) -> bool:
 
 def _reread(
     file_id: str, path: str, is_paused: Callable[[], bool] | None,
+    *, require_loft_mime: bool = False,
 ) -> bool:
     """Read a video again under the current rule, or keep its earlier read.
 
@@ -729,14 +740,16 @@ def _reread(
         )
         return _keep_earlier_read(file_id)
 
-    if not _store_read(file_id, result.segments):
+    if not _store_read(
+        file_id, result.segments, require_loft_mime=require_loft_mime,
+    ):
         return False
-    return _build_rows(file_id)
+    return _build_rows(file_id, require_loft_mime=require_loft_mime)
 
 
 def index_frame_ocr(
     file_id: str, *, is_paused: Callable[[], bool] | None = None,
-    source_path: str | None = None,
+    source_path: str | None = None, require_loft_mime: bool = False,
 ) -> bool:
     """Read one video's frames, or rebuild its stored read's search rows.
 
@@ -766,11 +779,13 @@ def index_frame_ocr(
         )
 
     if already_read and not already_indexed:
-        return _build_rows(file_id)
+        return _build_rows(file_id, require_loft_mime=require_loft_mime)
     if already_read and already_indexed:
         if not outdated:
             return True
-        return _reread(file_id, path, is_paused)
+        return _reread(
+            file_id, path, is_paused, require_loft_mime=require_loft_mime,
+        )
 
     if source_path is not None:
         path = source_path
@@ -801,9 +816,9 @@ def index_frame_ocr(
             "closing it as read",
             file_id, type(cause).__name__,
         )
-        if not _store_read(file_id, []):
+        if not _store_read(file_id, [], require_loft_mime=require_loft_mime):
             return False
-        return _build_rows(file_id)
+        return _build_rows(file_id, require_loft_mime=require_loft_mime)
 
     if result.times_failed:
         logger.warning(
@@ -848,6 +863,8 @@ def index_frame_ocr(
             file_id, result.engine_errors,
         )
 
-    if not _store_read(file_id, result.segments):
+    if not _store_read(
+        file_id, result.segments, require_loft_mime=require_loft_mime,
+    ):
         return False
-    return _build_rows(file_id)
+    return _build_rows(file_id, require_loft_mime=require_loft_mime)

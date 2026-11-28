@@ -50,6 +50,10 @@ from app.models import (  # noqa: E402
     VideoVisualScene,
 )
 from tests.vec_partition_db import search_index  # noqa: E402,F401 - fixture
+from tests.youtube_frame_doubles import (  # noqa: E402,F401 - fixtures
+    needs_ffmpeg,
+    youtube,
+)
 
 LOFT_MIME = "application/vnd.litloft.loft+json"
 VIDEO_MIME = "video/mp4"
@@ -810,3 +814,279 @@ def _index_value(index, column, file_id=FILE_ID):
             text(f"SELECT {column} FROM indexed_files WHERE file_id = :f"),
             {"f": file_id},
         ).scalar_one()
+
+
+# ---------------------------------------------------------------------------
+# I37: a conversion during the slow steps of a fetch, before each store
+# ---------------------------------------------------------------------------
+
+VIDEO_SECONDS = 40.0
+
+
+@pytest.fixture(scope="module")
+def loft_video(tmp_path_factory):
+    from tests.test_spec_addon_111_frame_scan_task import _encode
+
+    return _encode(tmp_path_factory.mktemp("loft-converted") / "rendition.mp4")
+
+
+@pytest.fixture()
+def real_pillow(monkeypatch):
+    """Real Pillow, in ``sys.modules`` and wherever an app module holds it."""
+    from tests.search_endpoint_db import patch_everywhere
+    from tests.youtube_frame_doubles import real_pil_modules
+
+    real = real_pil_modules()
+    for name, module in real.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    patch_everywhere(monkeypatch, "Image", real["PIL.Image"])
+    return real["PIL.Image"]
+
+
+@pytest.fixture()
+def fetch_world(search_index, youtube, monkeypatch, tmp_path, make_settings,
+                real_pillow):
+    from tests.loft_media_world import LoftWorld
+
+    return LoftWorld(search_index, youtube, monkeypatch, tmp_path, make_settings)
+
+
+@pytest.fixture()
+def fresh_loft_state():
+    from app.workers import loft_media
+
+    loft_media.reset_worker_state()
+    yield
+    loft_media.reset_worker_state()
+
+
+def _sync_to_video(world):
+    """The conversion's ``files.moved`` sync: the row is now the media file."""
+    world.set(
+        FILE_ID, mime_type=VIDEO_MIME, filename=f"{TITLE}.mp4",
+        file_path=str(world.drive_dir / f"{TITLE}.mp4"),
+    )
+
+
+def _answer(world, video, *, board=None):
+    """The lookup's answer: one downloadable rendition, and maybe a storyboard."""
+    from tests.youtube_frame_doubles import SIGNED_TOKEN, describe, video_format
+
+    path = "/v/rendition"
+    world.youtube.server.files[path] = video.read_bytes()
+    formats = [video_format(
+        "rendition", 720, url=f"{world.youtube.base}{path}?sig={SIGNED_TOKEN}",
+    )]
+    if board is not None:
+        formats.append(board)
+    world.youtube.set_ytdlp(describe=describe(formats, duration=VIDEO_SECONDS))
+
+
+def _board(world, pil):
+    from tests.test_spec_addon_078_youtube_storyboard import storyboard_fps
+    from tests.youtube_frame_doubles import storyboard_format
+
+    world.youtube.server.files["/sb/sheet.png"] = _sheet(pil)
+    return storyboard_format(
+        world.youtube.base, [("sheet.png", VIDEO_SECONDS)],
+        rows=3, columns=3, tile=(320, 180),
+        fps=storyboard_fps(VIDEO_SECONDS),
+    )
+
+
+def _sheet(png) -> bytes:
+    import io
+
+    image = png.new("RGB", (960, 540), (30, 60, 90))
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue()
+
+
+def _assert_fetch_wrote_nothing(world, caplog):
+    assert world.failures(FILE_ID) == 0
+    assert world.fetch_dir_files() == []
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages.count(INFO_SKIP.format(file_id=FILE_ID)) == 1
+
+
+@needs_ffmpeg
+def test_spec_addon_196_i37_the_storyboard_store_after_the_sync_writes_nothing(
+    fetch_world, loft_video, real_pillow, monkeypatch, caplog, fresh_loft_state,
+):
+    from app.workers import loft_media
+    from tests.loft_media_world import fetch
+
+    world = fetch_world
+    _answer(world, loft_video, board=_board(world, real_pillow))
+    world.add_loft(FILE_ID, duration=VIDEO_SECONDS, loft_candidates_done=True)
+
+    real_lookup = loft_media.youtube_source.run_lookup
+
+    def _lookup_then_sync(*args, **kwargs):
+        answer = real_lookup(*args, **kwargs)
+        _sync_to_video(world)
+        return answer
+
+    monkeypatch.setattr(loft_media.youtube_source, "run_lookup", _lookup_then_sync)
+
+    with caplog.at_level(logging.INFO):
+        fetch(FILE_ID)
+
+    assert world.index.embeddings(FILE_ID) == []
+    assert bool(world.value(FILE_ID, "clip_indexed")) is False
+    assert world.scan_rows(FILE_ID) == 0
+    _assert_fetch_wrote_nothing(world, caplog)
+
+
+@needs_ffmpeg
+def test_spec_addon_196_i37_the_scan_store_after_the_sync_writes_nothing(
+    fetch_world, loft_video, real_pillow, monkeypatch, caplog, fresh_loft_state,
+):
+    from app.workers import loft_media
+    from tests.loft_media_world import fetch
+
+    world = fetch_world
+    _answer(world, loft_video)
+    world.add_loft(FILE_ID, loft_candidates_done=True)
+
+    real_download = loft_media.youtube_source.download_rendition
+
+    def _download_then_sync(*args, **kwargs):
+        outcome = real_download(*args, **kwargs)
+        _sync_to_video(world)
+        return outcome
+
+    monkeypatch.setattr(
+        loft_media.youtube_source, "download_rendition", _download_then_sync,
+    )
+
+    with caplog.at_level(logging.INFO):
+        fetch(FILE_ID)
+
+    assert world.scan_rows(FILE_ID) == 0
+    assert world.flags(FILE_ID)[0] is False
+    _assert_fetch_wrote_nothing(world, caplog)
+
+
+@needs_ffmpeg
+def test_spec_addon_196_i37_the_frame_read_store_after_the_sync_writes_nothing(
+    fetch_world, loft_video, real_pillow, monkeypatch, caplog, fresh_loft_state,
+):
+    from app.workers import loft_media
+    from tests.loft_media_world import fetch
+
+    world = fetch_world
+    world.configure(frame_ocr="on_index")
+    _answer(world, loft_video)
+    world.add_loft(
+        FILE_ID,
+        loft_candidates_done=True,
+        frame_scan_indexed=True,
+        frame_ocr_read=False,
+        frame_ocr_indexed=False,
+    )
+
+    real_download = loft_media.youtube_source.download_rendition
+
+    def _download_then_sync(*args, **kwargs):
+        outcome = real_download(*args, **kwargs)
+        _sync_to_video(world)
+        return outcome
+
+    monkeypatch.setattr(
+        loft_media.youtube_source, "download_rendition", _download_then_sync,
+    )
+
+    with caplog.at_level(logging.INFO):
+        fetch(FILE_ID)
+
+    assert world.frame_texts(FILE_ID) == []
+    assert world.flags(FILE_ID) == (True, False, False)
+    _assert_fetch_wrote_nothing(world, caplog)
+
+
+# ---------------------------------------------------------------------------
+# I37: the discarded transcription's JobRecord is finished
+# ---------------------------------------------------------------------------
+
+
+class _LoftProvider:
+    """A provider that converts the file while its transcription is in flight."""
+
+    name = "fake"
+
+    def __init__(self, sync):
+        self.capabilities = SimpleNamespace(
+            handles_own_retry=True,
+            sends_audio_offhost=False,
+            supports_word_timestamps=True,
+        )
+        self._sync = sync
+
+    async def transcribe(self, *_args, **_kwargs):
+        self._sync()
+        return [SimpleNamespace(
+            text="hello world", start=0.0, end=1.0, language="en",
+            words=[
+                SimpleNamespace(text="hello", start=0.0, end=0.5, speaker_id=None),
+                SimpleNamespace(text="world", start=0.5, end=1.0, speaker_id=None),
+            ],
+        )]
+
+
+def _job_rows(index):
+    with index.engine.connect() as conn:
+        return [dict(row._mapping) for row in conn.execute(text(
+            "SELECT status, error_class, completed_at FROM job_records ORDER BY id"
+        ))]
+
+
+def test_spec_addon_196_i37_a_discarded_stt_transcription_finishes_its_job(
+    search_index, tmp_path, monkeypatch, make_settings,
+):
+    import asyncio
+
+    from app.workers import whisper
+
+    folder = tmp_path / "drive"
+    folder.mkdir()
+    loft = folder / f"{TITLE}.loft"
+    loft.write_text("{}", encoding="utf-8")
+    (folder / f"{TITLE}{whisper.LOFT_STT_TEMP_SUFFIX}").write_bytes(b"audio")
+    search_index.add_file(
+        FILE_ID, drive=DRIVE, mime_type=LOFT_MIME, file_path=str(loft),
+    )
+    search_index.sql(
+        "UPDATE indexed_files SET whisper_indexed = 0 WHERE file_id = :f",
+        f=FILE_ID,
+    )
+
+    def _sync():
+        search_index.sql(
+            "UPDATE indexed_files SET mime_type = :m, filename = :n, "
+            "file_path = :p WHERE file_id = :f",
+            m=VIDEO_MIME, n=f"{TITLE}.mp4", p=str(folder / f"{TITLE}.mp4"),
+            f=FILE_ID,
+        )
+
+    async def _enabled(_drive, _feature):
+        return True
+
+    monkeypatch.setattr("app.policy_client.is_feature_enabled", _enabled)
+    monkeypatch.setattr(whisper, "settings", make_settings())
+    monkeypatch.setattr(whisper, "validate_file_path", lambda _path: True)
+    monkeypatch.setattr(whisper, "get_provider", lambda _name: _LoftProvider(_sync))
+    monkeypatch.setattr(whisper, "emit_processing_updated", lambda *a, **k: None)
+    text_dim = search_index.dim("vec_text")
+    monkeypatch.setattr(
+        whisper, "embed_passages",
+        lambda texts: [np.ones(text_dim, dtype=np.float32) for _ in texts],
+    )
+
+    assert asyncio.run(whisper.index_whisper(FILE_ID)) is False
+
+    rows = _job_rows(search_index)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "skipped"
+    assert rows[0]["completed_at"] is not None

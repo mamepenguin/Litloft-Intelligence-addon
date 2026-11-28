@@ -29,7 +29,7 @@ from app.video_frames import (
 )
 from app.workers.clip import VIDEO_TYPES
 from app.workers.metadata import _remove_embeddings
-from app.workers.whisper import LOFT_MIME
+from app.workers.whisper import LOFT_MIME, _NoLongerALoft, _skip_no_longer_loft
 
 logger = logging.getLogger(__name__)
 
@@ -149,11 +149,14 @@ def _policy_allows(drive: str) -> bool:
     return bool(verdict)
 
 
-def _store(file_id: str, decoded: _Decoded) -> bool:
+def _store(
+    file_id: str, decoded: _Decoded, *, require_loft_mime: bool = False,
+) -> bool:
     """Replace the file's scan, delete its change frames, and close its flag.
 
     One transaction, so a failure leaves the previous scan and change frames in
-    use and the flag false.
+    use and the flag false. ``require_loft_mime`` is a ``.loft`` fetch's: the
+    row's mime is checked in this transaction before anything is written.
     """
     hashes = np.packbits(decoded.hashes, axis=1).tobytes() if decoded.seconds else b""
     with get_search_db() as session:
@@ -165,6 +168,8 @@ def _store(file_id: str, decoded: _Decoded) -> bool:
                 "Frame scan skipped for %s: file is no longer active", file_id,
             )
             return False
+        if require_loft_mime and row.mime_type != LOFT_MIME:
+            _skip_no_longer_loft(file_id)
         _remove_embeddings(session, file_id, CHANGE_TYPE)
         session.query(VideoFrameScan).filter_by(file_id=file_id).delete()
         # No second decoded: a scan row would claim a scan of a video that has
@@ -183,7 +188,7 @@ def _store(file_id: str, decoded: _Decoded) -> bool:
 
 def index_frame_scan(
     file_id: str, *, is_paused: Callable[[], bool] | None = None,
-    source_path: str | None = None,
+    source_path: str | None = None, require_loft_mime: bool = False,
 ) -> bool:
     """Scan one video's seconds and store its hashes and sizes.
 
@@ -280,7 +285,9 @@ def index_frame_scan(
         return False
 
     try:
-        return _store(file_id, decoded)
+        return _store(file_id, decoded, require_loft_mime=require_loft_mime)
+    except _NoLongerALoft:
+        raise
     except Exception as exc:
         logger.error("Frame scan write failed for %s: %s", file_id, exc)
         return False

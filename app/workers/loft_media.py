@@ -48,7 +48,11 @@ from app.workers.frame_ocr import index_frame_ocr
 from app.workers.frame_scan import index_frame_scan
 from app.workers.metadata import _remove_embeddings
 from app.workers.ocr import _get_engine
-from app.workers.whisper import LOFT_MIME
+from app.workers.whisper import (
+    LOFT_MIME,
+    _NoLongerALoft,
+    _skip_no_longer_loft,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,15 +245,6 @@ def _load_state(file_id: str) -> _State | None:
         )
 
 
-class _NoLongerALoft(Exception):
-    """The row's mime stopped being the `.loft` mime while its task ran."""
-
-
-def _skip_no_longer_loft(file_id: str) -> None:
-    logger.info("loft task skipped, no longer a .loft (file %s)", file_id)
-    raise _NoLongerALoft
-
-
 def _write(file_id: str, values: dict) -> None:
     with get_search_db() as session:
         row = session.query(IndexedFile).filter_by(
@@ -307,7 +302,11 @@ def _storyboard_step(
                     load_image_model()
                 except Exception:
                     return
-            index_storyboard(file_id, description, state.duration)
+            index_storyboard(
+                file_id, description, state.duration, require_loft_mime=True,
+            )
+    except _NoLongerALoft:
+        raise
     except Exception as exc:  # noqa: BLE001 - the fetch goes on regardless
         logger.warning(
             "youtube storyboard failed: file=%s class=%s",
@@ -755,7 +754,10 @@ def _fetch(
             try:
                 index_frame_scan(
                     file_id, is_paused=is_paused, source_path=str(destination),
+                    require_loft_mime=True,
                 )
+            except _NoLongerALoft:
+                raise
             except Exception as exc:
                 logger.error(
                     "loft_media scan failed for %s (%s)", file_id, type(exc).__name__,
@@ -767,7 +769,10 @@ def _fetch(
             try:
                 index_frame_ocr(
                     file_id, is_paused=is_paused, source_path=str(destination),
+                    require_loft_mime=True,
                 )
+            except _NoLongerALoft:
+                raise
             except Exception as exc:
                 logger.error(
                     "loft_media OCR failed for %s (%s)", file_id, type(exc).__name__,

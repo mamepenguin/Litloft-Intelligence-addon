@@ -32,7 +32,7 @@ from app.frame_cache import frame_cache_dir, round_ms, tile_cache_dir
 from app.models import Embedding, IndexedFile
 from app.video_frames import extract_frame
 from app.workers import blip, ml_imports
-from app.workers.whisper import LOFT_MIME
+from app.workers.whisper import LOFT_MIME, _skip_no_longer_loft
 from app.youtube_source import (
     STORYBOARD_LOOKUP_LIMIT_SECONDS,
     YOUTUBE_PROVIDER,
@@ -1033,11 +1033,14 @@ def _index_clip_loft(
     return _index_youtube_storyboard(file_id, file_path, duration)
 
 
-def _close_scene_leg(file_id: str) -> None:
+def _close_scene_leg(file_id: str, *, require_loft_mime: bool = False) -> None:
     with get_search_db() as session:
         f = session.query(IndexedFile).filter_by(file_id=file_id).first()
-        if f is not None:
-            f.clip_indexed = True
+        if f is None:
+            return
+        if require_loft_mime and f.mime_type != LOFT_MIME:
+            _skip_no_longer_loft(file_id)
+        f.clip_indexed = True
 
 
 def _storyboard_definite(file_id: str) -> bool:
@@ -1101,6 +1104,7 @@ def _index_youtube_storyboard(
 
 def index_storyboard(
     file_id: str, description: dict, indexed_duration: float | None,
+    *, require_loft_mime: bool = False,
 ) -> bool:
     """Embed the storyboard ``description`` names as ``file_id``'s scene rows.
 
@@ -1117,7 +1121,7 @@ def index_storyboard(
             "youtube storyboard absent: file=%s class=%s sheets=0 tiles=0",
             file_id, "no_sb0" if board is None else "no_duration",
         )
-        _close_scene_leg(file_id)
+        _close_scene_leg(file_id, require_loft_mime=require_loft_mime)
         return True
 
     frames = settings.indexing.frame_extraction
@@ -1126,6 +1130,9 @@ def index_storyboard(
     try:
         embedded = _embed_tiles(board, tiles, new_tiles)
         with get_search_db() as session:
+            f = session.query(IndexedFile).filter_by(file_id=file_id).first()
+            if require_loft_mime and f is not None and f.mime_type != LOFT_MIME:
+                _skip_no_longer_loft(file_id)
             _remove_clip_embeddings(session, file_id)
             for timestamp, vector in embedded:
                 _store_clip_embedding(

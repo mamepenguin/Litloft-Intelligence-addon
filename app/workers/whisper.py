@@ -1206,14 +1206,18 @@ async def _do_transcribe_and_index(
         for w in seg.get("words") or []
     )
 
-    stored = await asyncio.to_thread(
-        _persist_transcript,
-        file_id,
-        provider.name,
-        raw_segments,
-        job_id,
-        require_loft_mime=require_loft_mime,
-    )
+    try:
+        stored = await asyncio.to_thread(
+            _persist_transcript,
+            file_id,
+            provider.name,
+            raw_segments,
+            job_id,
+            require_loft_mime=require_loft_mime,
+        )
+    except _NoLongerALoft:
+        await asyncio.to_thread(_finish_job_skipped_no_longer_loft, job_id)
+        raise
     if stored is False:
         # A correction saved while this ran owns the stored text.
         return False
@@ -1285,6 +1289,18 @@ def _finish_job_failed(job_id: int, exc: Exception) -> None:
         record.status = "failed"
         record.error_class = type(exc).__name__
         record.error_message = str(exc)[:1000]
+        record.completed_at = datetime.now(UTC)
+
+
+def _finish_job_skipped_no_longer_loft(job_id: int) -> None:
+    """Close the running job a conversion overtook, without new rows."""
+    with get_search_db() as session:
+        record = session.query(JobRecord).filter_by(id=job_id).first()
+        if record is None:
+            return
+        record.status = "skipped"
+        record.error_class = "NoLongerALoft"
+        record.error_message = "converted"
         record.completed_at = datetime.now(UTC)
 
 
